@@ -22,7 +22,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /home/runner/android-ndk
-          key: ${{ runner.os }}-ndk-r26b
+          key: ${{ runner.os }}-ndk-r30
 
       # 2. 如果缓存未命中，则通过最稳定的渠道下载 pure NDK
       - name: Download and Install Pure Android NDK
@@ -34,8 +34,8 @@ jobs:
           echo "[*] Unzipping NDK toolchain..."
           unzip -q /home/runner/ndk.zip -d /home/runner/android-ndk
           # 将解压出来的多级目录结构移出来，保证路径绝对整洁
-          mv /home/runner/android-ndk/android-ndk-r26b/* /home/runner/android-ndk/
-          rm -rf /home/runner/ndk.zip /home/runner/android-ndk/android-ndk-r26b
+          mv /home/runner/android-ndk/android-ndk-r30/* /home/runner/android-ndk/
+          rm -rf /home/runner/ndk.zip /home/runner/android-ndk/android-ndk-r30
 
       # 3. 联合联合链接与机器码大融合命令
       - name: Joint Compilation and Linking (Fusion)
