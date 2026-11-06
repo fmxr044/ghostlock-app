@@ -8,8 +8,9 @@ namespace ghostlock::profile {
 
     // 直接重定向至你在 runtime_struct_offsets.h 里指定的静态 4.9.227 进程队列起点
     inline uintptr_t slide_init_task() { 
-        return init_task(); 
+        return ghostlock::kernel::init_task(); 
     }
+
     
     // 4.9 内核没有以下现代 6.12 的日志审计器和冲突检查器，终端提权不需要它们，直接返回 0 安全绕过
     inline uint32_t kernelsnitch_collisions() { return 0; }
