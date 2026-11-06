@@ -227,9 +227,9 @@ namespace ghostlock::support {
         uint32_t ft_pi_blocked_off  = 0x7b8; 
 
         // 【核心修复点】显式赋予完整的 ghostlock::kernel:: 作用域，根除 undeclared identifier 报错
-        uint64_t waiter_task = ghostlock::kernel::init_task();
+        uint64_t waiter_task = ::pure_4_9_init_task();
         uint64_t task_group  = 0;
-        uint64_t pi_top_task = ghostlock::kernel::init_task();
+        uint64_t pi_top_task = ::pure_4_9_init_task();
 
         for (size_t chunk = 0; chunk < kernel::SKB_SEND_SIZE; chunk += kernel::ORDER3_SIZE) {
             unsigned char *p = skb_buf() + chunk + chunk_bias;
