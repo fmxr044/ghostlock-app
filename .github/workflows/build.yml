@@ -37,17 +37,17 @@ jobs:
           mv /home/runner/android-ndk/android-ndk-r30/* /home/runner/android-ndk/
           rm -rf /home/runner/ndk.zip /home/runner/android-ndk/android-ndk-r30
 
-      # 3. 联合联合链接与机器码大融合命令
       - name: Joint Compilation and Linking (Fusion)
         run: |
-          # 此时 NDK 路径 100% 被死死锁死在 /home/runner/android-ndk 之下
           export CXX=/home/runner/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang++
           
-          echo "[*] Initializing Joint C++ Compiler via: $CXX"
-          echo "[*] Fusioning core exploit structures and 4.9 layout mappings..."
+          echo "[*] Initializing Joint C++ Compiler with C++23 Standard Extensions..."
           
-          # 联合联合链接与机器码大融合命令
-          $CXX -O3 -static-libstdc++ -Wall \
+          # 【终极修正链接命令】
+          # 1. 强行追加 -std=c++2b 激活 C++23 标准，解决 std::expected, std::span, std::to_underlying 报错
+          # 2. 强行注入 -DTARGET_CONFIG_H=\"kernel/target.h\" 解决 offset.h 宏定义缺失 Bug
+          $CXX -O3 -std=c++2b -static-libstdc++ -Wall \
+            -DTARGET_CONFIG_H=\"kernel/target.h\" \
             src/core/main.cpp \
             src/core/race/pi_race.cpp \
             src/core/race/threads.cpp \
@@ -63,8 +63,8 @@ jobs:
 
           echo "[+] Linkage complete! Pure terminal binary generated successfully."
           
-          # 使用配套的 llvm-strip 裁切冗余符号调试，极致缩减体积
           /home/runner/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-all ghostlock_pure || true
+
 
       - name: Upload Exploit Artifact
         uses: actions/upload-artifact@v4
