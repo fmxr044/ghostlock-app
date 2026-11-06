@@ -8,7 +8,7 @@ namespace ghostlock::profile {
 
     // 【终极修复点】使用全局绝对双冒号运算符，彻底粉碎任何类成员同名污染 Bug
     inline uintptr_t slide_init_task() { 
-        return ::pure_4_9_init_task(); 
+        return ::pure_49_init_task(); 
     }
     
     // 4.9 内核不需要现代高版本组件，直接返回 0 安全绕过
