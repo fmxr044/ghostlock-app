@@ -6,13 +6,12 @@
 
 namespace ghostlock::profile {
 
-    // 直接重定向至你在 runtime_struct_offsets.h 里指定的静态 4.9.227 进程队列起点
+    // 【终极修复点】使用全局绝对双冒号运算符，彻底粉碎任何类成员同名污染 Bug
     inline uintptr_t slide_init_task() { 
-        return ghostlock::kernel::init_task(); 
+        return ::pure_4_9_init_task(); 
     }
-
     
-    // 4.9 内核没有以下现代 6.12 的日志审计器和冲突检查器，终端提权不需要它们，直接返回 0 安全绕过
+    // 4.9 内核不需要现代高版本组件，直接返回 0 安全绕过
     inline uint32_t kernelsnitch_collisions() { return 0; }
     inline uintptr_t slide_nfulnl_logger()    { return 0; }
     inline uintptr_t slide_loggers_0_1()      { return 0; }
