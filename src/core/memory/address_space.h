@@ -4,7 +4,6 @@
 #include "profile/model.h"
 #include "kernel/target_constants.hpp"
 #include <optional>
-
 #include <cstdint>
 
 namespace ghostlock::memory {
@@ -24,6 +23,9 @@ namespace ghostlock::memory {
          * P0_PHYS_OFFSET; a profile may override it via kernel_phys_offset. */
         uintptr_t phys_offset = 0;
         target::KernelAddress<target::ImageAddressDomain> init_cred_image;
+
+        // 【终极修复补全】为 Linux 4.9.227 显式声明这个用来挂载硬编码对齐后运行时虚拟 text 基准的变量
+        uintptr_t kernel_virtual_start = 0;
 
         int32_t init(const ghostlock::profile::TargetProfile *profile);
 
