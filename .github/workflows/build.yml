@@ -1,6 +1,6 @@
 name: Build Pure Terminal Binary
 
-# 彻底改成只在手动点击时触发，防止每次 push 盲目浪费编译时间
+# 锁定为纯手动触发，防盲目盲目浪费资源
 on:
   workflow_dispatch:
 
@@ -16,16 +16,32 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      # 弃用不稳定的三方 NDK 安装包，直接使用 Ubuntu 镜像自带的官方 NDK 路径
-      - name: Locate Pre-installed Android NDK
-        run: |
-          echo "NDK_HOME=$ANDROID_NDK_LATEST" >> $GITHUB_ENV
-          echo "[*] Using System Default NDK Path: $ANDROID_NDK_LATEST"
+      # 1. 采用标准的 SDK 动作，设置缓存 key
+      - name: Cache Android NDK
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/android-ndk
+          key: ${{ runner.os }}-ndk-r26b
 
+      # 2. 如果缓存未命中，则通过最稳定的渠道下载 pure NDK
+      - name: Download and Install Pure Android NDK
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p /home/runner/android-ndk
+          echo "[*] Downloading official Android NDK..."
+          curl -fL "https://dl.google.com/android/repository/android-ndk-r30-linux.zip?hl=zh-cn" -o /home/runner/ndk.zip
+          echo "[*] Unzipping NDK toolchain..."
+          unzip -q /home/runner/ndk.zip -d /home/runner/android-ndk
+          # 将解压出来的多级目录结构移出来，保证路径绝对整洁
+          mv /home/runner/android-ndk/android-ndk-r26b/* /home/runner/android-ndk/
+          rm -rf /home/runner/ndk.zip /home/runner/android-ndk/android-ndk-r26b
+
+      # 3. 联合联合链接与机器码大融合命令
       - name: Joint Compilation and Linking (Fusion)
         run: |
-          # 直接使用 GitHub Actions 官方提供的绝对路径变量，彻底消除拼接 Bug
-          export CXX=$ANDROID_NDK_LATEST/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang++
+          # 此时 NDK 路径 100% 被死死锁死在 /home/runner/android-ndk 之下
+          export CXX=/home/runner/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang++
           
           echo "[*] Initializing Joint C++ Compiler via: $CXX"
           echo "[*] Fusioning core exploit structures and 4.9 layout mappings..."
@@ -48,8 +64,7 @@ jobs:
           echo "[+] Linkage complete! Pure terminal binary generated successfully."
           
           # 使用配套的 llvm-strip 裁切冗余符号调试，极致缩减体积
-          $ANDROID_NDK_LATEST/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-all ghostlock_pure || true
-
+          /home/runner/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-all ghostlock_pure || true
 
       - name: Upload Exploit Artifact
         uses: actions/upload-artifact@v4
