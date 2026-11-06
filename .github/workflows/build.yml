@@ -24,12 +24,8 @@ jobs:
 
       - name: Joint Compilation and Linking (Fusion)
         run: |
-          # 动态读取系统自带的最新稳定版 Clang 交叉编译器
-          export CXX=$NDK_ENV/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang++
-          # 如果上一行在某些极端特定环境中变量未对齐，fallback 到标准默认高通/安卓 28 交叉编译链
-          if [ ! -f "$CXX" ]; then
-            export CXX=$ANDROID_NDK_LATEST/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang++
-          fi
+          # 直接使用 GitHub Actions 官方提供的绝对路径变量，彻底消除拼接 Bug
+          export CXX=$ANDROID_NDK_LATEST/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang++
           
           echo "[*] Initializing Joint C++ Compiler via: $CXX"
           echo "[*] Fusioning core exploit structures and 4.9 layout mappings..."
@@ -52,8 +48,8 @@ jobs:
           echo "[+] Linkage complete! Pure terminal binary generated successfully."
           
           # 使用配套的 llvm-strip 裁切冗余符号调试，极致缩减体积
-          STRIP_TOOL=$(dirname "$CXX")/llvm-strip
-          $STRIP_TOOL --strip-all ghostlock_pure || true
+          $ANDROID_NDK_LATEST/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-all ghostlock_pure || true
+
 
       - name: Upload Exploit Artifact
         uses: actions/upload-artifact@v4
